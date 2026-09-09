@@ -92,9 +92,12 @@ chown -R "$DISPLAY_USER":"$DISPLAY_USER" "$APP_DIR" "$LOG_DIR"
 #  4. PYTHON VIRTUAL-ENV + FLASK
 # =============================================================================
 info "Setting up Python virtual environment…"
-python3 -m venv "$APP_DIR/venv"
+# --system-site-packages lets the venv reuse the apt-installed python3-pil
+# (Pillow), so we don't try to compile it from source (no C toolchain on the Pi).
+python3 -m venv --system-site-packages "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$APP_DIR/venv/bin/pip" install --quiet flask werkzeug pillow
+# Flask + Werkzeug are pure-Python (no compiler needed). Pillow comes from apt.
+"$APP_DIR/venv/bin/pip" install --quiet flask werkzeug
 
 # =============================================================================
 #  5. INITIAL STATE FILE
