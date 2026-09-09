@@ -217,16 +217,16 @@ HTML = """
   <h2>Current Status</h2>
   <div class="status-box">
     <div class="stat">
-      <div class="val">{{ state.current_index + 1 }} / {{ state.images|length }}</div>
-      <div class="lbl">Current image slot</div>
-    </div>
-    <div class="stat">
       <div class="val">{{ today }}</div>
       <div class="lbl">Today's date</div>
     </div>
     <div class="stat">
-      <div class="val">{{ current_image or '—' }}</div>
+      <div class="val">{{ playing_now }}</div>
       <div class="lbl">Playing now</div>
+    </div>
+    <div class="stat">
+      <div class="val">{{ state.images|length }}</div>
+      <div class="lbl">Photos scheduled</div>
     </div>
     <div class="stat">
       <div class="val">{{ state.skipped_dates|length }}</div>
@@ -239,7 +239,7 @@ HTML = """
 <div class="card">
   <h2>Upload Images</h2>
   <form method="post" action="/upload" enctype="multipart/form-data">
-    <label>Select one or more images (PNG, JPG, GIF, BMP, WEBP)</label>
+    <label>Name each file YYYY-MM-DD (e.g. 2026-03-14.jpg) — it shows on that date. PNG, JPG, GIF, BMP, WEBP.</label>
     <input type="file" name="files" accept="image/*" multiple required>
     <input type="submit" value="Upload">
   </form>
@@ -249,8 +249,8 @@ HTML = """
 <div class="card">
   <h2>Schedule a Skip</h2>
   <p style="font-size:.85rem;color:#94a3b8;margin-bottom:10px">
-    On a skipped date the screen shows BLACK for the whole day. The photo
-    rotation keeps advancing underneath, so the next day shows the next photo.
+    On a skipped date the screen shows BLACK for the whole day, even if a photo
+    is named for that date.
   </p>
   <form method="post" action="/skip">
     <label>Date to skip (YYYY-MM-DD)</label>
@@ -287,57 +287,47 @@ HTML = """
 
 <!-- IMAGE LIST -->
 <div class="card">
-  <h2>Image Order <span style="font-size:.8rem;color:#64748b">(drag to reorder)</span></h2>
-  <table>
-    <tr><th>#</th><th></th><th>Filename</th><th>Actions</th></tr>
-    <tbody id="img-list">
-    {% for img in state.images %}
-    <tr data-name="{{ img }}" draggable="true">
-      <td>{{ loop.index }}</td>
-      <td><img class="thumb" src="/image/{{ img }}" alt="{{ img }}"></td>
-      <td>{{ img }}</td>
-      <td>
-        <form method="post" action="/image/delete" style="display:inline">
-          <input type="hidden" name="filename" value="{{ img }}">
-          <button class="btn-danger" style="padding:4px 10px;font-size:.8rem">Delete</button>
-        </form>
-        {% if loop.index0 == state.current_index %}
-          <span class="badge badge-blue" style="margin-left:6px">▶ Now</span>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <h2>Photos <span style="font-size:.8rem;color:#64748b">(each file must be named YYYY-MM-DD, e.g. 2026-03-14.jpg)</span></h2>
   {% if state.images %}
-  <button onclick="saveOrder()" style="margin-top:12px;background:#059669">💾 Save Order</button>
+  <form method="post" action="/image/delete_bulk" id="bulk-form"
+        onsubmit="return confirm('Delete the selected photo(s)? This cannot be undone.');">
+    <table>
+      <tr>
+        <th><input type="checkbox" id="check-all" onclick="toggleAll(this)" style="width:auto;margin:0"></th>
+        <th></th><th>Date</th><th>Filename</th><th></th>
+      </tr>
+      {% for row in photos %}
+      <tr>
+        <td><input type="checkbox" name="filenames" value="{{ row.name }}" class="row-check" style="width:auto;margin:0"></td>
+        <td><img class="thumb" src="/image/{{ row.name }}" alt="{{ row.name }}"></td>
+        <td>
+          {% if row.date %}
+            {{ row.date }}
+            {% if row.date == today %}<span class="badge badge-blue" style="margin-left:6px">▶ Today</span>{% endif %}
+          {% else %}
+            <span class="badge badge-red">bad name</span>
+          {% endif %}
+        </td>
+        <td>{{ row.name }}</td>
+        <td>
+          <form method="post" action="/image/delete" style="display:inline">
+            <input type="hidden" name="filename" value="{{ row.name }}">
+            <button class="btn-danger" style="padding:4px 10px;font-size:.8rem">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <button type="submit" class="btn-danger" style="margin-top:12px">🗑 Delete Selected</button>
+  </form>
+  {% else %}
+  <p style="color:#94a3b8;font-size:.9rem">No photos yet. Upload some above.</p>
   {% endif %}
 </div>
 
 <script>
-// drag-and-drop reorder
-let dragged = null;
-document.querySelectorAll('#img-list tr').forEach(row => {
-  row.addEventListener('dragstart', e => { dragged = row; row.classList.add('dragging'); });
-  row.addEventListener('dragend',   e => row.classList.remove('dragging'));
-  row.addEventListener('dragover',  e => { e.preventDefault(); row.style.borderTop='2px solid #3b82f6'; });
-  row.addEventListener('dragleave', e => row.style.borderTop='');
-  row.addEventListener('drop', e => {
-    e.preventDefault(); row.style.borderTop='';
-    if (dragged && dragged !== row)
-      row.parentNode.insertBefore(dragged, row);
-  });
-});
-function saveOrder() {
-  const order = [...document.querySelectorAll('#img-list tr')].map(r => r.dataset.name);
-  fetch('/reorder', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({order})
-  }).then(r => r.json()).then(d => {
-    if (d.ok) location.reload();
-    else alert('Error saving order');
-  });
+function toggleAll(box){
+  document.querySelectorAll('.row-check').forEach(c => c.checked = box.checked);
 }
 </script>
 </body>
@@ -345,6 +335,15 @@ function saveOrder() {
 """
 
 # ── routes ────────────────────────────────────────────────────────────────────
+def parse_date_from_name(name):
+    """Return 'YYYY-MM-DD' if the filename (minus extension) is a valid date, else None."""
+    base = os.path.splitext(name)[0]
+    try:
+        datetime.strptime(base, "%Y-%m-%d")
+        return base
+    except ValueError:
+        return None
+
 @app.route("/")
 def index():
     state = load_state()
@@ -353,12 +352,23 @@ def index():
     # pull flash messages from cookie-less param
     if request.args.get("msg"):
         msgs.append((request.args["msg"], request.args.get("cat", "ok")))
-    ci = state.get("current_index", 0)
+
     imgs = state.get("images", [])
-    current_image = imgs[ci] if imgs and ci < len(imgs) else None
+    # Build rows with parsed date, sorted so dated photos are in date order.
+    photos = [{"name": n, "date": parse_date_from_name(n)} for n in imgs]
+    photos.sort(key=lambda r: (r["date"] is None, r["date"] or r["name"]))
+
+    # What is on screen today?
+    skipped = state.get("skipped_dates", [])
+    if today in skipped:
+        playing_now = "BLACK (skipped)"
+    else:
+        match = next((r["name"] for r in photos if r["date"] == today), None)
+        playing_now = match if match else ("test image" if not imgs else "BLACK (no photo today)")
+
     return render_template_string(HTML,
-        state=state, today=today,
-        messages=msgs, current_image=current_image)
+        state=state, today=today, photos=photos,
+        messages=msgs, playing_now=playing_now)
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -366,44 +376,61 @@ def upload():
     if not files:
         return redirect(url_for("index", msg="No files selected", cat="error"))
     state = load_state()
-    saved = 0
+    saved, bad = 0, []
     for f in files:
         if f and allowed_file(f.filename):
             name = secure_filename(f.filename)
-            # avoid collisions
-            base, ext = os.path.splitext(name)
-            counter = 1
-            while os.path.exists(os.path.join(IMG_DIR, name)):
-                name = f"{base}_{counter}{ext}"
-                counter += 1
+            # Uploading the same date-name replaces that day's photo (overwrite).
             f.save(os.path.join(IMG_DIR, name))
             if name not in state["images"]:
                 state["images"].append(name)
             saved += 1
+            if parse_date_from_name(name) is None:
+                bad.append(name)
     save_state(state)
     reload_slideshow()
-    return redirect(url_for("index", msg=f"Uploaded {saved} image(s)"))
+    msg = f"Uploaded {saved} image(s)."
+    cat = "ok"
+    if bad:
+        msg += (" WARNING: these are NOT named YYYY-MM-DD and will not display: "
+                + ", ".join(bad))
+        cat = "error"
+    return redirect(url_for("index", msg=msg, cat=cat))
 
 @app.route("/image/<filename>")
 def serve_image(filename):
     return send_from_directory(IMG_DIR, filename)
 
+def _remove_one(state, name):
+    """Remove a single image from state + disk. Returns True if it existed."""
+    if name in state["images"]:
+        state["images"].remove(name)
+        path = os.path.join(IMG_DIR, name)
+        if os.path.exists(path):
+            os.remove(path)
+        return True
+    return False
+
 @app.route("/image/delete", methods=["POST"])
 def delete_image():
     name  = request.form.get("filename", "")
     state = load_state()
-    if name in state["images"]:
-        state["images"].remove(name)
-        # keep index in bounds
-        if state["current_index"] >= len(state["images"]):
-            state["current_index"] = max(0, len(state["images"]) - 1)
+    if _remove_one(state, name):
         save_state(state)
-        path = os.path.join(IMG_DIR, name)
-        if os.path.exists(path):
-            os.remove(path)
         reload_slideshow()
         return redirect(url_for("index", msg=f"Deleted {name}"))
     return redirect(url_for("index", msg="Image not found", cat="error"))
+
+@app.route("/image/delete_bulk", methods=["POST"])
+def delete_bulk():
+    names = request.form.getlist("filenames")
+    if not names:
+        return redirect(url_for("index", msg="No photos selected", cat="error"))
+    state = load_state()
+    deleted = sum(1 for n in names if _remove_one(state, n))
+    save_state(state)
+    reload_slideshow()
+    return redirect(url_for("index", msg=f"Deleted {deleted} photo(s)"))
 
 @app.route("/skip", methods=["POST"])
 def add_skip():
@@ -427,26 +454,6 @@ def delete_skip():
         save_state(state)
     return redirect(url_for("index", msg=f"Skip removed for {d}"))
 
-@app.route("/reorder", methods=["POST"])
-def reorder():
-    data  = request.get_json(force=True)
-    order = data.get("order", [])
-    state = load_state()
-    # validate — only keep names that actually exist
-    existing = set(state["images"])
-    new_order = [n for n in order if n in existing]
-    # figure out what was "current" and keep it current
-    old_current = (state["images"][state["current_index"]]
-                   if state["images"] else None)
-    state["images"] = new_order
-    if old_current and old_current in new_order:
-        state["current_index"] = new_order.index(old_current)
-    else:
-        state["current_index"] = 0
-    save_state(state)
-    reload_slideshow()
-    return jsonify(ok=True)
-
 @app.route("/api/state")
 def api_state():
     return jsonify(load_state())
@@ -467,40 +474,16 @@ cat > "$APP_DIR/advance.py" <<'PYEOF'
 #!/usr/bin/env python3
 """
 Run at midnight via cron.
-Always advances current_index by 1 (wraps around) — every single day.
-A "skipped" date does NOT change advancing; it only causes the DISPLAY
-to show a black screen for that day (handled in display.sh).
-Then restart the display service so it re-evaluates what to show.
+The slideshow is DATE-DRIVEN: each day it shows the photo whose filename is
+that day's date (YYYY-MM-DD). There is nothing to "advance" — we just restart
+the display service so it re-evaluates for the new date right at 00:00.
+(The display also re-checks on its own every minute as a safety net.)
 """
-import json, subprocess
+import subprocess
 from datetime import date
 
-STATE = "/opt/slideshow/state.json"
-
-def load():
-    with open(STATE) as f: return json.load(f)
-
-def save(s):
-    with open(STATE, "w") as f: json.dump(s, f, indent=2)
-
 def main():
-    today = date.today().isoformat()
-    s = load()
-
-    images = s.get("images", [])
-    if not images:
-        print("[advance] No images configured.")
-        # still restart so the display picks up a possible skip/black screen
-        subprocess.run(["systemctl", "restart", "slideshow-display"], check=False)
-        return
-
-    old = s["current_index"]
-    s["current_index"] = (old + 1) % len(images)
-    save(s)
-    print(f"[advance] {today}: advanced from {old} ({images[old]}) "
-          f"→ {s['current_index']} ({images[s['current_index']]})")
-
-    # Restart display so it re-checks skip status AND shows the new image
+    print(f"[advance] {date.today().isoformat()}: restarting display for new date.")
     subprocess.run(["systemctl", "restart", "slideshow-display"], check=False)
 
 if __name__ == "__main__":
@@ -605,31 +588,51 @@ except Exception:
 " 2>/dev/null)
 
     if [[ "$IS_SKIPPED" == "yes" ]]; then
+        # Skipped date -> black screen all day
         TARGET="$BLACK_IMG"
     else
-        # Current photo from state
+        # Date-driven: find the photo whose filename is TODAY's date
+        # (e.g. 2026-03-14.jpg for 2026-03-14). If none matches -> black.
+        # Special case: if NO photos exist at all yet, show the test image
+        # so first boot confirms the screen works.
         IMG_NAME=$(python3 -c "
-import json
+import json, os
+IMG_DIR='$IMG_DIR'
+today='$TODAY'
 try:
     with open('$STATE') as f: s=json.load(f)
-    imgs=s.get('images',[]); idx=s.get('current_index',0)
-    print(imgs[idx] if imgs and idx < len(imgs) else '')
+    imgs = s.get('images', [])
 except Exception:
-    print('')
+    imgs = []
+
+# match a file named exactly today's date, any image extension
+match=''
+for name in imgs:
+    base=os.path.splitext(name)[0]
+    if base==today:
+        match=name
+        break
+
+if match:
+    print('PHOTO:'+match)
+elif not imgs:
+    print('TEST')          # nothing uploaded yet
+else:
+    print('BLACK')         # photos exist but none for today -> black
 " 2>/dev/null)
 
-        if [[ -z "$IMG_NAME" ]]; then
-            # No photos uploaded yet -> show the test image right away
-            # (so you can confirm the display works without waiting for midnight).
-            if [[ -f "$TEST_IMG" ]]; then
-                TARGET="$TEST_IMG"
-            else
+        case "$IMG_NAME" in
+            PHOTO:*)
+                TARGET="$IMG_DIR/${IMG_NAME#PHOTO:}"
+                [[ -f "$TARGET" ]] || TARGET="$BLACK_IMG"
+                ;;
+            TEST)
+                if [[ -f "$TEST_IMG" ]]; then TARGET="$TEST_IMG"; else TARGET="$BLACK_IMG"; fi
+                ;;
+            *)
                 TARGET="$BLACK_IMG"
-            fi
-        else
-            TARGET="$IMG_DIR/$IMG_NAME"
-            [[ -f "$TARGET" ]] || TARGET="$BLACK_IMG"
-        fi
+                ;;
+        esac
     fi
 
     # If a black image was requested but we never managed to generate one,
@@ -783,11 +786,19 @@ echo -e "       so you can confirm the screen works — no waiting for midnight.
 echo -e "   3. Open the Web UI from any device on your Tailscale network"
 echo -e "      and upload your photos."
 echo ""
-echo -e "  ${YELLOW}How skips work:${NC}"
-echo -e "   • Midnight cron runs advance.py every night at 00:00, always"
-echo -e "     advancing to the next photo (wraps around at the end)."
-echo -e "   • A SKIPPED date does NOT stop advancing — instead the display"
-echo -e "     shows a BLACK screen for that whole day."
-echo -e "   • The display also re-checks every minute, so it flips to/from"
-echo -e "     black right at midnight even before the cron restart fires."
+echo -e "  ${YELLOW}How it works (DATE-DRIVEN):${NC}"
+echo -e "   • Name each photo by the date it should appear: YYYY-MM-DD"
+echo -e "     e.g. 2026-03-14.jpg shows on Mar 14 2026, 2027-01-01.jpg on"
+echo -e "     Jan 1 2027. Multi-year is fine."
+echo -e "   • Each day the screen shows the photo whose name is today's date."
+echo -e "   • No photo for today  -> BLACK screen."
+echo -e "   • A SKIPPED date      -> BLACK screen (even if a photo is named"
+echo -e "     for that date)."
+echo -e "   • The display re-checks every minute, so it changes right at"
+echo -e "     midnight on its own."
+echo ""
+echo -e "  ${YELLOW}Web UI features:${NC}"
+echo -e "   • Upload photos (named YYYY-MM-DD)"
+echo -e "   • Bulk delete: tick checkboxes (or Select All) -> Delete Selected"
+echo -e "   • Schedule / remove skip dates"
 echo ""

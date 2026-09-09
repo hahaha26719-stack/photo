@@ -1,58 +1,68 @@
 # Pi Slideshow (`setup.sh`)
 
-A one-shot setup script for a **Raspberry Pi Zero 2** that runs a daily photo
-slideshow with a **Tailscale-hosted web UI** for uploading pictures and
-scheduling day skips.
+A one-shot setup script for a **Banana Pi P2 Zero** (or Raspberry Pi Zero) that
+runs a **date-driven** photo slideshow with a **Tailscale-hosted web UI** for
+uploading pictures and scheduling black-screen skips.
 
-## Install (run once on the Pi)
+## Install (run once on the board)
 
 ```bash
-sudo bash setup.sh
-sudo tailscale up      # if Tailscale isn't authenticated yet
-sudo reboot
+apt update && apt install -y git      # git is needed to clone
+git clone https://github.com/hahaha26719-stack/photo.git
+cd photo
+bash setup.sh                          # auto-detects your desktop user
+tailscale up                           # authenticate (opens a login URL)
+reboot
 ```
 
-After reboot the screen shows a **test image** immediately (so you can confirm
-the display works without waiting for midnight). Open the web UI from any device
-on your tailnet and upload photos.
+> If auto-detection picks the wrong user, run:
+> `SLIDESHOW_USER=yourname bash setup.sh`
 
-## Web UI
+After reboot the attached screen shows a **test image** until you upload photos.
+Get your web UI address with `tailscale ip -4` → `http://<ip>:5000`.
 
-Reachable at `http://<tailscale-ip>:5000`:
+## How it works — DATE-DRIVEN
 
-- **Upload** one or more photos (PNG/JPG/GIF/BMP/WEBP)
-- **Reorder** photos by drag-and-drop
-- **Delete** photos
-- **Schedule a skip** for any date, or remove one
-- **Live status** — which photo is playing, today's date, skip count
+Name each photo by **the date it should appear**, in `YYYY-MM-DD` format:
 
-## How it works
+```
+2026-03-14.jpg   -> shows on 14 March 2026
+2026-12-25.png   -> shows on 25 December 2026
+2027-01-01.jpg   -> shows on 1 January 2027
+```
+
+Multi-year is fully supported (the year is in the name).
 
 | Situation | On screen |
 |-----------|-----------|
-| Fresh setup, no photos yet | Test image ("Slideshow Ready") |
-| You upload photos | Current photo — immediately |
-| Normal day | Current photo |
-| **Skipped date** | **Black screen for the whole day** |
-| Midnight | Advances to the next photo (wraps around) |
+| A photo is named for today | That photo |
+| **No** photo named for today | **Black screen** |
+| Today is a **skipped** date | **Black screen** (even if a photo matches) |
+| No photos uploaded at all | Test/placeholder image |
 
-- A midnight cron job (`advance.py`) **always** advances to the next photo.
-- A **skipped date** does not stop advancing — instead the display shows a
-  **black screen** that whole day. The rotation keeps moving underneath, so the
-  next day shows the next photo.
-- The display re-checks every 60 seconds, so it flips to/from black right at
-  midnight even before the cron restart fires.
+- The display re-checks every 60 seconds, so it switches to the new day's
+  photo right at midnight on its own.
+- Files **not** named `YYYY-MM-DD` are kept but never displayed; the web UI
+  flags them with a red "bad name" tag.
 
-## Files created on the Pi
+## Web UI (`http://<tailscale-ip>:5000`)
+
+- **Upload** one or more photos (name them `YYYY-MM-DD`)
+- **Bulk delete** — tick checkboxes (or "Select all") then **Delete Selected**
+- **Delete** a single photo with its row button
+- **Schedule a skip** for any date, or remove one
+- **Status** — today's date, what's playing now, photo count, skip count
+
+## Files created on the board
 
 | Path | Purpose |
 |------|---------|
 | `/opt/slideshow/app.py` | Flask web UI |
-| `/opt/slideshow/advance.py` | Midnight photo-advance (cron) |
-| `/opt/slideshow/display.sh` | feh display loop |
-| `/opt/slideshow/state.json` | Current index, skipped dates, image list |
+| `/opt/slideshow/advance.py` | Midnight cron — restarts display for the new date |
+| `/opt/slideshow/display.sh` | Date-driven feh display loop |
+| `/opt/slideshow/state.json` | Image list + skipped dates |
 | `/opt/slideshow/images/` | Uploaded photos |
 | `/etc/systemd/system/slideshow-web.service` | Web UI service |
 | `/etc/systemd/system/slideshow-display.service` | Display service |
-| `/etc/cron.d/slideshow-advance` | Midnight cron |
+| `/etc/cron.d/slideshow-advance` | Midnight refresh |
 | `/var/log/slideshow/` | Logs |
