@@ -20,7 +20,40 @@ IMG_DIR="$APP_DIR/images"
 STATE_FILE="$APP_DIR/state.json"
 LOG_DIR="/var/log/slideshow"
 WEB_PORT=5000
-DISPLAY_USER="${SUDO_USER:-pi}"          # the desktop user that runs feh
+
+# ── work out which desktop user runs the slideshow ───────────────────────────
+# Priority:
+#   1. SLIDESHOW_USER env var  (override: SLIDESHOW_USER=foo bash setup.sh)
+#   2. SUDO_USER               (set when invoked via sudo)
+#   3. first real login user in /home that has a passwd entry
+# We then verify the chosen user actually exists.
+pick_display_user() {
+    local candidate=""
+    if [[ -n "$SLIDESHOW_USER" ]]; then
+        candidate="$SLIDESHOW_USER"
+    elif [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+        candidate="$SUDO_USER"
+    else
+        # first directory in /home that is also a valid user account
+        for d in /home/*; do
+            [[ -d "$d" ]] || continue
+            local u; u="$(basename "$d")"
+            if id "$u" &>/dev/null; then candidate="$u"; break; fi
+        done
+    fi
+    echo "$candidate"
+}
+
+DISPLAY_USER="$(pick_display_user)"
+
+if [[ -z "$DISPLAY_USER" ]] || ! id "$DISPLAY_USER" &>/dev/null; then
+    error "Could not determine a valid desktop user. Re-run like:  SLIDESHOW_USER=sadya bash setup.sh"
+fi
+
+DISPLAY_HOME="$(getent passwd "$DISPLAY_USER" | cut -d: -f6)"
+[[ -z "$DISPLAY_HOME" ]] && DISPLAY_HOME="/home/$DISPLAY_USER"
+
+info "Slideshow will run as user: $DISPLAY_USER (home: $DISPLAY_HOME)"
 
 # =============================================================================
 #  1. SYSTEM PACKAGES
@@ -660,7 +693,7 @@ After=graphical.target
 Type=simple
 User=$DISPLAY_USER
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/$DISPLAY_USER/.Xauthority
+Environment=XAUTHORITY=$DISPLAY_HOME/.Xauthority
 ExecStart=$APP_DIR/display.sh
 Restart=always
 RestartSec=5
@@ -686,7 +719,7 @@ chmod 644 "$CRON_FILE"
 info "Configuring auto-start X session for $DISPLAY_USER…"
 
 PROFILE_LINE='[[ -z $DISPLAY && $XDG_VTNR -eq 1 ]] && startx -- -nocursor'
-PROFILE_FILE="/home/$DISPLAY_USER/.bash_profile"
+PROFILE_FILE="$DISPLAY_HOME/.bash_profile"
 
 if ! grep -qF "startx" "$PROFILE_FILE" 2>/dev/null; then
     echo "" >> "$PROFILE_FILE"
@@ -696,7 +729,7 @@ if ! grep -qF "startx" "$PROFILE_FILE" 2>/dev/null; then
 fi
 
 # Openbox autostart — launch the display service script directly under X
-OPENBOX_DIR="/home/$DISPLAY_USER/.config/openbox"
+OPENBOX_DIR="$DISPLAY_HOME/.config/openbox"
 mkdir -p "$OPENBOX_DIR"
 cat > "$OPENBOX_DIR/autostart" <<OBAUTO
 # Start the slideshow display
