@@ -39,6 +39,10 @@ import numpy as np
 CENTER_X = 960
 LINE3_CENTER_Y = 750                 # vertical center of original "in honor of" line
 COVER_BOX = (285, 655, 1635, 885)    # central rect repainted to remove old line 3
+# Central rect over line 1 ("Thank You <donor name>"), repainted to delete it.
+# Side leaf/border art stays outside x<=85 / x>=1792 in this band; logo ends ~y253
+# above and line 2 starts ~y546 below, so this band is safe.
+TITLE_BOX = (330, 360, 1630, 495)
 MAX_TEXT_W = 1360                    # max width for a rendered line
 MAX_BLOCK_TOP = 660
 MAX_BLOCK_BOTTOM = 880               # stay above the gold olive branch (~y896)
@@ -127,10 +131,10 @@ def layout_lines(draw, full_line, font_path, max_w, max_h):
     return font, lines, line_h, int(line_h * 0.12)
 
 
-def repaint_background(im):
-    """Seamlessly clear the central line-3 region by reconstructing the background
-    gradient per-row from clean columns just inside the cover box edges."""
-    x0, y0, x1, y1 = COVER_BOX
+def repaint_background(im, box):
+    """Seamlessly clear a central region by reconstructing the background gradient
+    per-row from clean columns just inside the box's left/right edges."""
+    x0, y0, x1, y1 = box
     a = np.array(im)
     left = a[y0:y1, x0 + 4:x0 + 34].reshape((y1 - y0), -1, 3)
     right = a[y0:y1, x1 - 34:x1 - 4].reshape((y1 - y0), -1, 3)
@@ -143,7 +147,8 @@ def repaint_background(im):
 
 def render(img_path, honors, out_path, font_path):
     im = Image.open(img_path).convert("RGB")
-    im = repaint_background(im)
+    im = repaint_background(im, TITLE_BOX)   # delete line 1 ("Thank You <donor name>")
+    im = repaint_background(im, COVER_BOX)   # clear old line 3 before redrawing the honor
     draw = ImageDraw.Draw(im)
 
     honor = build_honor_text(honors)

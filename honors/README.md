@@ -14,6 +14,9 @@ font (Liberation Serif ≈ Times New Roman), the same navy color, centering, and
 vertical position as the template — with a seamless background repaint so no
 placeholder text or edit box remains.
 
+The first line (**`Thank You <donor name>`**) is **removed** — the region is
+cleared with the same seamless background repaint, leaving no text behind.
+
 - **303 slides** processed: **2026-09-01 → 2027-06-30**.
 - **136 slides** got one or more real honors from the sheet.
 - **167 slides** had no honor listed for that day and were given a clean
@@ -43,9 +46,8 @@ python3 generate_honor_images.py \
     --out output_with_honors
 ```
 
-## Note on `<donor name>`
+## Line 1 (`Thank You <donor name>`)
 
-The first line still reads **`Thank You <donor name>`**. The per-day section of
-`Names_organized` lists **honors only** — it has no donor name for each day — so
-that placeholder was intentionally left untouched. If you have a
-date → donor-name list, the same script can fill line 1 the same way.
+Line 1 is now deleted from every slide (the `Names_organized` per-day section
+lists honors only, with no donor name per day). If you later have a
+date → donor-name list, the same script can render a donor name there instead.
