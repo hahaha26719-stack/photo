@@ -250,7 +250,7 @@ def _join(items):
 def build_honor_sentences(honors):
     """Return a list of sentences (strings) phrased naturally from the honors."""
     if not honors:
-        return ["In honor of this special day."]
+        return ["In honor of the students of Ohr Temimim."]
 
     verbatim = []          # standalone sentences kept as-is
     mem_subjects = []      # subjects to fold into "In memory of ..."
@@ -305,18 +305,40 @@ def layout_paragraph(draw, sentences, font_path, size, max_w):
 
 
 def repaint_background(im, box):
-    """Clear a region with a single flat background color sampled from clean
-    margins just outside the box. Flat fill avoids the streaks/boxes that a
-    per-row or gradient reconstruction produces on near-empty slides."""
+    """Clear a region so no old text remains and no visible patch is left behind.
+
+    The card background has a soft radial vignette, so a flat fill or a per-row
+    fill both leave a visible rectangle/streaks. Instead we rebuild the band as a
+    smooth 2-D gradient interpolated from four clean reference strips just OUTSIDE
+    the box (above / below / left / right), each heavily smoothed so no text
+    residue or column noise is carried in. The result blends into the vignette.
+    """
     x0, y0, x1, y1 = box
-    a = np.array(im)
-    # sample clean background from the strips just left and right of the text box
-    left = a[y0:y1, max(0, x0 - 60):x0 - 10].reshape(-1, 3)
-    right = a[y0:y1, x1 + 10:x1 + 60].reshape(-1, 3)
-    samples = np.concatenate([left, right], axis=0)
-    bg = np.median(samples, axis=0).astype(np.uint8)
-    a[y0:y1, x0:x1] = bg
-    return Image.fromarray(a)
+    a = np.array(im).astype(np.float64)
+    Hb, Wb = y1 - y0, x1 - x0
+
+    def smooth1d(p, k):
+        k = min(k, len(p) // 2 * 2 + 1)
+        ker = np.ones(k) / k
+        pad = k // 2
+        return np.stack([np.convolve(np.pad(p[:, c], pad, mode="edge"), ker, "valid")[:len(p)]
+                         for c in range(3)], axis=1)
+
+    # horizontal profiles from clean strips above and below the text band
+    top = smooth1d(a[max(0, y0 - 26):y0 - 6, x0:x1].mean(0), 121)      # (Wb,3)
+    bot = smooth1d(a[y1 + 6:y1 + 26, x0:x1].mean(0), 121)              # (Wb,3)
+    # vertical profiles from clean strips left and right of the text band
+    lft = smooth1d(a[y0:y1, max(0, x0 - 26):x0 - 6].mean(1), 121)      # (Hb,3)
+    rgt = smooth1d(a[y0:y1, x1 + 6:x1 + 26].mean(1), 121)             # (Hb,3)
+
+    ty = np.linspace(0, 1, Hb)[:, None, None]
+    tx = np.linspace(0, 1, Wb)[None, :, None]
+    vert = (1 - ty) * top[None, :, :] + ty * bot[None, :, :]           # top->bottom
+    horiz = (1 - tx) * lft[:, None, :] + tx * rgt[:, None, :]          # left->right
+    grad = 0.5 * (vert + horiz)                                        # blend both
+
+    a[y0:y1, x0:x1] = grad
+    return Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
 
 
 def draw_centered(draw, text, font, y, fill):

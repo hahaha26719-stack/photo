@@ -61,7 +61,8 @@ All three sections of `Names_organized` are used, with a fallback chain per day:
   show that month's dedication (e.g. all of Teves → "In honor of Mr. and Mrs.
   Aaron Gellman and in memory of our beloved Grandparents").
 - **50** fall in Tishrei / Adar I / Adar II, which have **no sponsor anywhere in
-  the sheet**, so they show `In honor of this special day.`
+  the sheet** (verified by two independent recomputes), so they show
+  `In honor of the students of Ohr Temimim.`
 
 Gregorian→Hebrew month conversion uses the `pyluach` library.
 
