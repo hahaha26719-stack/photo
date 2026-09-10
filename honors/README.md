@@ -1,37 +1,66 @@
-# Honors integrated into the daily sponsorship slides
+# Parness Hayom daily slides — honors integrated
 
-This folder holds the result of merging the honors from
-`Names_organized` (in `Parness Hayom names 2026.ods`) into the daily
-"Thank You / for sponsoring / in honor of" slides shipped in `pics.zip`
-(`output_days_jpg/YYYY-MM-DD.jpg`, 1920×1080).
+This folder holds the result of re-composing the daily "Parness Hayom"
+sponsorship slides shipped in `pics.zip` (`output_days_jpg/YYYY-MM-DD.jpg`,
+1920×1080) using the honors from the `Names_organized` sheet of
+`Parness Hayom names 2026.ods`.
 
 ## What was done
 
-Every slide's third line originally read **`in honor of <honor>.`** with a
-literal placeholder. For each date, the `<honor>` placeholder was replaced with
-the honor(s) the sheet lists for that calendar day, redrawn in a matching serif
-font (Liberation Serif ≈ Times New Roman), the same navy color, centering, and
-vertical position as the template — with a seamless background repaint so no
-placeholder text or edit box remains.
+The original template had three placeholder lines:
 
-The first line (**`Thank You <donor name>`**) is **removed** — the region is
-cleared with the same seamless background repaint, leaving no text behind.
+```
+Thank You <donor name>
+for sponsoring <Date>
+in honor of <honor>.
+```
 
-- **303 slides** processed: **2026-09-01 → 2027-06-30**.
-- **136 slides** got one or more real honors from the sheet.
-- **167 slides** had no honor listed for that day and were given a clean
-  `in honor of this day.` line (removing the `<honor>` placeholder).
-- Days with multiple honors are combined naturally (`A and B`, or
-  `A, B, and C`); long text auto-wraps and the font auto-shrinks (79→down)
-  to stay inside the frame and above the gold olive-branch decoration.
+The per-day section of the sheet lists **honors only** (no donor names), so the
+donor line was dropped and each slide re-composed as a clean, centered card that
+fills the space and reads naturally:
 
-Honors in the sheet are keyed by **month + day** (recurring annually), so
-Sep–Dec map to the 2026 rows and Jan–Jun to the 2027 rows.
+```
+        Sponsored for          (gold italic label)
+       <Month D, YYYY>         (bold headline)
+        ── gold rule ──
+   <naturally-phrased honor(s)>
+```
+
+Everything is redrawn in the template's serif (Liberation Serif ≈ Times New
+Roman), navy `#14203C`, centered, with a seamless per-row background repaint so
+no old text or edit box shows through. The block is vertically centered in the
+open area between the logo and the gold olive-branch decoration.
+
+### Honor phrasing
+
+Raw sheet entries are normalized so the sentence reads well (no more
+"in honor of Yahrzeit of …"):
+
+| Sheet entry              | Rendered as                              |
+|--------------------------|------------------------------------------|
+| `Yahrzeit of X`          | `In memory of X`                         |
+| `Birthday of X`          | `In honor of the birthday of X`          |
+| `Anniversary of X`       | `In honor of the anniversary of X`       |
+| `Bar Mitzvah of X`       | `In honor of the Bar Mitzvah of X`       |
+| `In memory/honor of …`   | kept verbatim                            |
+
+Days with **multiple honors** are grouped: all memorials fold into one
+`In memory of A, B, and C.` sentence and all celebrations into one
+`In honor of …` sentence. Long text auto-wraps and the honor font auto-shrinks
+(74 → down) to stay inside the frame and above the olive branch.
+
+## Results
+
+- **303 slides**: 2026-09-01 → 2027-06-30.
+- **136** slides have one or more honors from the sheet.
+- **167** days had no honor listed → `In honor of this special day.`
 
 ## Files
 
 - `generate_honor_images.py` — reproducible generator (see header for usage).
-- `honors_map.json` — the parsed `date → [honors]` mapping used.
+- `honors_map.json` — the parsed `date → [raw honors]` mapping.
+- `generation_summary.json` — per-date raw honors, the phrased sentences, line
+  count and font size actually used.
 - `output_with_honors.zip` — all 303 finished JPEGs (same `YYYY-MM-DD.jpg`
   names as the source, ready to drop into the photo-frame slideshow).
 
@@ -39,6 +68,7 @@ Sep–Dec map to the 2026 rows and Jan–Jun to the 2027 rows.
 
 ```bash
 pip install pandas odfpy Pillow
+sudo dnf install -y liberation-serif-fonts   # or install Liberation/Times serif
 # from a dir containing the .ods and pics/output_days_jpg/*.jpg
 python3 generate_honor_images.py \
     --ods "Parness Hayom names 2026.ods" \
@@ -46,8 +76,7 @@ python3 generate_honor_images.py \
     --out output_with_honors
 ```
 
-## Line 1 (`Thank You <donor name>`)
+## Adding donor names later
 
-Line 1 is now deleted from every slide (the `Names_organized` per-day section
-lists honors only, with no donor name per day). If you later have a
-date → donor-name list, the same script can render a donor name there instead.
+If you get a date → donor-name list, the generator can render a donor line
+above the date the same way — the layout already leaves room for it.
