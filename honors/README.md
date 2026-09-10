@@ -49,11 +49,21 @@ Days with **multiple honors** are grouped: all memorials fold into one
 `In honor of …` sentence. Long text auto-wraps and the honor font auto-shrinks
 (74 → down) to stay inside the frame and above the olive branch.
 
-## Results
+## Coverage
+
+All three sections of `Names_organized` are used, with a fallback chain per day:
+**specific day honor → that date's Hebrew-month sponsor → generic line.**
+(The "Month of" and "Week of" honors live in column 1; per-day honors in column 2.)
 
 - **303 slides**: 2026-09-01 → 2027-06-30.
-- **136** slides have one or more honors from the sheet.
-- **167** days had no honor listed → `In honor of this special day.`
+- **136** show a specific day honor from the per-day section.
+- **117** have no specific day honor but fall in a sponsored Hebrew month, so they
+  show that month's dedication (e.g. all of Teves → "In honor of Mr. and Mrs.
+  Aaron Gellman and in memory of our beloved Grandparents").
+- **50** fall in Tishrei / Adar I / Adar II, which have **no sponsor anywhere in
+  the sheet**, so they show `In honor of this special day.`
+
+Gregorian→Hebrew month conversion uses the `pyluach` library.
 
 ## Files
 

@@ -47,15 +47,18 @@ import datetime
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
+from pyluach import dates as heb_dates
 
 # ---- template geometry (measured from the 1920x1080 slides) ----
 CENTER_X = 960
 # The full open area between the logo (ends ~y253) and the gold olive branch
 # (~y896). We clear the two old text lines and compose fresh inside this band.
 CLEAR_BOXES = [
-    (300, 355, 1625, 495),   # old line 1  "Thank You <donor name>"
-    (300, 520, 1625, 640),   # old line 2  "for sponsoring <date>"
-    (285, 655, 1635, 885),   # old line 3  "in honor of <honor>."
+    # one continuous central band covering all three original text lines, so the
+    # repaint leaves no seams between separately-cleared boxes. Side leaf/border
+    # art stays outside x<=266 / x>=1660 across this band, and the logo ends
+    # ~y253 above while the gold olive branch starts ~y896 below.
+    (300, 320, 1620, 885),
 ]
 CONTENT_TOP = 330
 CONTENT_BOTTOM = 865
@@ -102,25 +105,90 @@ def find_fonts():
     return _pick(DEFAULT_FONT_CANDIDATES), _pick(BOLD_FONT_CANDIDATES), _pick(ITALIC_FONT_CANDIDATES)
 
 
-def parse_perday(ods_path):
-    """Return {(month, day): [honor, ...]} from the per-day section of the sheet."""
+HEB_MONTH_SET = {"tishrei", "cheshvan", "kislev", "teves", "shvat", "adar", "adar1",
+                 "adar2", "nissan", "iyar", "sivan", "tammuz", "av", "elul"}
+
+
+def heb_norm(name):
+    n = name.strip().lower()
+    return {"tevet": "teves", "shevat": "shvat", "nisan": "nissan",
+            "tamuz": "tammuz"}.get(n, n)
+
+
+def parse_sheet(ods_path):
+    """Parse ALL three sections of Names_organized.
+
+    Layout (empirically): a "Month of" header, then Hebrew-month sponsors with the
+    honor in COLUMN 1; a "Week of" header, then weekly sponsors (honor in col 1);
+    then a per-day section grouped by Gregorian month headers in col 0 with the
+    day in col 1 and the honor in COLUMN 2.
+
+    Returns (day_honors, month_sponsors):
+        day_honors[(greg_month, day)] = [honor, ...]
+        month_sponsors[hebrew_month]  = honor
+    """
     df = pd.read_excel(ods_path, sheet_name="Names_organized", engine="odf", header=None)
-    mapping = {}
-    current_month = None
-    for _, row in df.iterrows():
-        c0, c1, c2 = row[0], row[1], row[2]
-        if isinstance(c0, str) and c0.strip().lower() in MONTHS:
-            current_month = MONTHS[c0.strip().lower()]
+    n = len(df)
+
+    def cell(i, j):
+        return df.iat[i, j] if j < df.shape[1] else None
+
+    # locate section headers (skip empty col0 so blank rows don't look like headers)
+    row_month = row_week = None
+    day_headers = []
+    for i in range(n):
+        s0 = cell(i, 0)
+        s0 = s0.strip() if isinstance(s0, str) else ""
+        if not s0:
+            continue
+        if s0 == "Month of":
+            row_month = i
+        elif s0 == "Week of":
+            row_week = i
+        elif s0.lower() in MONTHS and row_week is not None and i > row_week:
+            day_headers.append((i, MONTHS[s0.lower()]))
+    day_start = day_headers[0][0] if day_headers else n
+
+    # Month-of sponsors (Hebrew month -> honor in col 1)
+    month_sponsors = {}
+    if row_month is not None:
+        end = row_week if row_week is not None else day_start
+        for i in range(row_month + 1, end):
+            s0 = cell(i, 0); c1 = cell(i, 1)
+            if isinstance(s0, str) and heb_norm(s0) in HEB_MONTH_SET \
+                    and isinstance(c1, str) and c1.strip():
+                month_sponsors[heb_norm(s0)] = c1.strip()
+
+    # per-day honors (day in col 1, honor in col 2), month from nearest header above
+    hdr_idx = {i: mo for i, mo in day_headers}
+    day_honors = {}
+    cur = None
+    for i in range(day_start, n):
+        if i in hdr_idx:
+            cur = hdr_idx[i]
+        c1 = cell(i, 1); c2 = cell(i, 2)
         day = None
         if pd.notna(c1):
             try:
                 day = int(float(c1))
             except (ValueError, TypeError):
                 day = None
-        honor = c2.strip() if isinstance(c2, str) and c2.strip() else None
-        if current_month and day and honor:
-            mapping.setdefault((current_month, day), []).append(honor)
-    return mapping
+        if cur and day and isinstance(c2, str) and c2.strip():
+            day_honors.setdefault((cur, day), []).append(c2.strip())
+
+    return day_honors, month_sponsors
+
+
+def honors_for_date(date_iso, day_honors, month_sponsors):
+    """Resolve the honors to show on a slide: specific day honor(s) if present,
+    otherwise the sponsor for that date's Hebrew month, otherwise none."""
+    y, m, d = map(int, date_iso.split("-"))
+    if (m, d) in day_honors:
+        return day_honors[(m, d)]
+    hebm = heb_norm(heb_dates.GregorianDate(y, m, d).to_heb().month_name())
+    if hebm in month_sponsors:
+        return [month_sponsors[hebm]]
+    return []
 
 
 # ---- honor phrasing -------------------------------------------------------
@@ -237,16 +305,17 @@ def layout_paragraph(draw, sentences, font_path, size, max_w):
 
 
 def repaint_background(im, box):
-    """Seamlessly clear a region by reconstructing the background gradient per-row
-    from clean columns just inside the box's left/right edges."""
+    """Clear a region with a single flat background color sampled from clean
+    margins just outside the box. Flat fill avoids the streaks/boxes that a
+    per-row or gradient reconstruction produces on near-empty slides."""
     x0, y0, x1, y1 = box
     a = np.array(im)
-    left = a[y0:y1, x0 + 4:x0 + 34].reshape((y1 - y0), -1, 3)
-    right = a[y0:y1, x1 - 34:x1 - 4].reshape((y1 - y0), -1, 3)
-    both = np.concatenate([left, right], axis=1)
-    row_bg = np.median(both, axis=1).astype(np.uint8)
-    for i in range(y1 - y0):
-        a[y0 + i, x0:x1] = row_bg[i]
+    # sample clean background from the strips just left and right of the text box
+    left = a[y0:y1, max(0, x0 - 60):x0 - 10].reshape(-1, 3)
+    right = a[y0:y1, x1 + 10:x1 + 60].reshape(-1, 3)
+    samples = np.concatenate([left, right], axis=0)
+    bg = np.median(samples, axis=0).astype(np.uint8)
+    a[y0:y1, x0:x1] = bg
     return Image.fromarray(a)
 
 
@@ -333,19 +402,25 @@ def main():
 
     fonts = find_fonts()
     os.makedirs(args.out, exist_ok=True)
-    perday = parse_perday(args.ods)
+    day_honors, month_sponsors = parse_sheet(args.ods)
     files = sorted(glob.glob(f"{args.src}/*.jpg"))
 
-    summary, n_honor = {}, 0
+    summary = {"day": 0, "month": 0, "none": 0}
+    per_date = {}
     for f in files:
         date_iso = os.path.basename(f)[:-4]
         _, m, d = map(int, date_iso.split("-"))
-        honors = perday.get((m, d), [])
-        n_honor += 1 if honors else 0
+        if (m, d) in day_honors:
+            honors, source = day_honors[(m, d)], "day"
+        else:
+            honors = honors_for_date(date_iso, day_honors, month_sponsors)
+            source = "month" if honors else "none"
+        summary[source] += 1
         date_str = format_date(date_iso)
         nlines, size = render(f, honors, date_str,
                               os.path.join(args.out, os.path.basename(f)), fonts)
-        summary[date_iso] = {
+        per_date[date_iso] = {
+            "source": source,
             "honors": honors,
             "phrased": build_honor_sentences(honors),
             "lines": nlines,
@@ -353,9 +428,11 @@ def main():
         }
 
     with open(os.path.join(args.out, "generation_summary.json"), "w", encoding="utf-8") as fh:
-        json.dump(summary, fh, ensure_ascii=False, indent=1)
-    print(f"Generated {len(files)} images into {args.out}/  ({n_honor} with honors, "
-          f"{len(files) - n_honor} without).")
+        json.dump(per_date, fh, ensure_ascii=False, indent=1)
+    print(f"Generated {len(files)} images into {args.out}/")
+    print(f"  specific day honor : {summary['day']}")
+    print(f"  month sponsor       : {summary['month']}")
+    print(f"  no sponsor (Tishrei/Adar): {summary['none']}")
 
 
 if __name__ == "__main__":
