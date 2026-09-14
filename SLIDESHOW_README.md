@@ -45,7 +45,16 @@ Multi-year is fully supported (the year is in the name).
 - Files **not** named `YYYY-MM-DD` are kept but never displayed; the web UI
   flags them with a red "bad name" tag.
 
-## Web UI (`http://<tailscale-ip>:5000`)
+## Web UI (`http://<tailscale-ip>:5000`) — starts automatically
+
+The web UI is **socket-activated**: it uses ~zero memory while idle, starts by
+itself the moment you open the URL, and shuts itself down after 10 minutes of
+no use. You never start/stop it manually. (The first page load after it's been
+idle takes a few seconds to wake up.)
+
+Helper: `slideshow-web url` prints the address; `slideshow-web status` shows
+whether it's currently awake.
+
 
 - **Upload** one or more photos (name them `YYYY-MM-DD`)
 - **Bulk delete** — tick checkboxes (or "Select all") then **Delete Selected**

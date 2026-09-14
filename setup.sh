@@ -127,7 +127,7 @@ Slideshow Web UI
 - Reorder images via drag-and-drop
 """
 
-import json, os, subprocess
+import json, os, subprocess, threading, time
 from datetime import date, datetime
 from flask import (Flask, render_template_string, request,
                    redirect, url_for, flash, jsonify, send_from_directory)
@@ -138,8 +138,33 @@ IMG_DIR   = os.path.join(APP_DIR, "images")
 STATE     = os.path.join(APP_DIR, "state.json")
 ALLOWED   = {"png", "jpg", "jpeg", "gif", "bmp", "webp"}
 
+# Auto-shutdown after this many seconds with no web requests, so the server
+# uses zero memory when nobody is using it. systemd's socket will restart it
+# on the next connection ("on when opened, off otherwise").
+IDLE_TIMEOUT = int(os.environ.get("IDLE_TIMEOUT", "600"))   # 10 minutes
+
 app = Flask(__name__)
 app.secret_key = "slideshow-secret-change-me"
+
+# ── idle auto-shutdown ────────────────────────────────────────────────────────
+_last_activity = time.time()
+
+@app.before_request
+def _mark_activity():
+    global _last_activity
+    _last_activity = time.time()
+
+def _idle_watchdog():
+    # Check often enough to honour small timeouts, but no less than every 15s.
+    interval = max(1, min(15, IDLE_TIMEOUT // 4))
+    while True:
+        time.sleep(interval)
+        if time.time() - _last_activity > IDLE_TIMEOUT:
+            # Exit cleanly; systemd socket activation will relaunch us on the
+            # next incoming connection.
+            os._exit(0)
+
+threading.Thread(target=_idle_watchdog, daemon=True).start()
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def load_state():
@@ -458,8 +483,18 @@ def api_state():
     return jsonify(load_state())
 
 if __name__ == "__main__":
-    # bind to all interfaces so Tailscale can reach it
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    # If systemd socket-activated us, it passes the listening socket as fd 3.
+    # Serve on that inherited socket (via werkzeug) so the socket unit can
+    # start us on-demand. Otherwise fall back to binding the port ourselves.
+    if os.environ.get("LISTEN_FDS") and os.environ.get("LISTEN_PID") == str(os.getpid()):
+        from werkzeug.serving import make_server
+        SD_LISTEN_FDS_START = 3   # systemd passes the socket as fd 3
+        srv = make_server("0.0.0.0", port, app, threaded=True, fd=SD_LISTEN_FDS_START)
+        srv.serve_forever()
+    else:
+        # bind to all interfaces so Tailscale can reach it
+        app.run(host="0.0.0.0", port=port, debug=False)
 PYEOF
 
 chown "$DISPLAY_USER":"$DISPLAY_USER" "$APP_DIR/app.py"
@@ -673,26 +708,40 @@ chown "$DISPLAY_USER":"$DISPLAY_USER" "$APP_DIR/display.sh"
 # =============================================================================
 #  9. SYSTEMD — WEB SERVICE
 # =============================================================================
-info "Writing systemd service: slideshow-web…"
+info "Writing systemd socket + service: slideshow-web (on-demand / socket-activated)…"
+
+# Socket unit: systemd holds port $WEB_PORT open using ~zero memory and starts
+# the Flask service on the FIRST incoming connection ("on when opened").
+cat > /etc/systemd/system/slideshow-web.socket <<UNIT
+[Unit]
+Description=Slideshow Web UI socket (on-demand)
+
+[Socket]
+ListenStream=0.0.0.0:$WEB_PORT
+
+[Install]
+WantedBy=sockets.target
+UNIT
+
+# Service unit: launched by the socket. The app auto-exits after IDLE_TIMEOUT
+# seconds of no requests, freeing memory; the socket relaunches it next time.
 cat > /etc/systemd/system/slideshow-web.service <<UNIT
 [Unit]
-Description=Slideshow Web UI (Flask)
+Description=Slideshow Web UI (Flask, socket-activated)
 After=network.target tailscaled.service
-Wants=tailscaled.service
+Requires=slideshow-web.socket
 
 [Service]
 Type=simple
 User=$DISPLAY_USER
 WorkingDirectory=$APP_DIR
 ExecStart=$APP_DIR/venv/bin/python $APP_DIR/app.py
-Restart=on-failure
-RestartSec=5
 StandardOutput=append:$LOG_DIR/web.log
 StandardError=append:$LOG_DIR/web-error.log
 Environment=PORT=$WEB_PORT
+Environment=IDLE_TIMEOUT=600
 
-# NOTE: intentionally NO [Install] section — the web UI is ON-DEMAND.
-# It does not start at boot. Start it with:  slideshow-web start
+# No [Install] — the SOCKET is what gets enabled, not the service.
 UNIT
 
 # =============================================================================
@@ -770,21 +819,22 @@ if [[ -f /swapfile ]] && ! grep -q '^/swapfile' /etc/fstab; then
     echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
-# ── on-demand helper command:  slideshow-web {start|stop|status|url} ─────────
+# ── helper command:  slideshow-web {url|status|stop} ────────────────────────
+# The web UI is socket-activated: it turns ON by itself when you open the URL
+# and turns OFF by itself after 10 min idle. This helper is just convenience.
 info "Installing 'slideshow-web' helper command…"
 cat > /usr/local/bin/slideshow-web <<HELP
 #!/usr/bin/env bash
 case "\$1" in
-  start)
-    sudo systemctl start slideshow-web
+  url)
     ip=\$(tailscale ip -4 2>/dev/null | head -1)
-    echo "Web UI running:  http://\${ip:-<tailscale-ip>}:$WEB_PORT"
-    echo "Stop it when done with:  slideshow-web stop"
+    echo "Open this — the server starts automatically when you do:"
+    echo "  http://\${ip:-<tailscale-ip>}:$WEB_PORT"
     ;;
-  stop)   sudo systemctl stop slideshow-web; echo "Web UI stopped (memory freed)." ;;
   status) systemctl status slideshow-web --no-pager ;;
-  url)    echo "http://\$(tailscale ip -4 2>/dev/null | head -1):$WEB_PORT" ;;
-  *)      echo "Usage: slideshow-web {start|stop|status|url}" ;;
+  stop)   sudo systemctl stop slideshow-web; echo "Web UI stopped (it will wake again when you open the URL)." ;;
+  *)      echo "Usage: slideshow-web {url|status|stop}"
+          echo "(The web UI starts on its own when you open the URL — you normally don't need this.)" ;;
 esac
 HELP
 chmod +x /usr/local/bin/slideshow-web
@@ -793,9 +843,12 @@ info "Reloading systemd and enabling services…"
 systemctl daemon-reload
 # Display starts at boot (it's the whole point of the photo frame):
 systemctl enable slideshow-display.service
-# Web UI is ON-DEMAND: NOT enabled at boot. Stop it if it's currently running.
+# Web UI: enable the SOCKET (always listening, ~0 memory), NOT the service.
+# The socket auto-starts the Flask service on the first connection.
 systemctl disable slideshow-web.service 2>/dev/null || true
 systemctl stop slideshow-web.service 2>/dev/null || true
+systemctl enable slideshow-web.socket
+systemctl restart slideshow-web.socket
 
 # =============================================================================
 #  14. PRINT SUMMARY
@@ -811,20 +864,19 @@ echo -e "  ${YELLOW}Images folder:${NC}    $IMG_DIR"
 echo -e "  ${YELLOW}State file:${NC}       $STATE_FILE"
 echo -e "  ${YELLOW}Logs:${NC}             $LOG_DIR/"
 echo ""
-echo -e "  ${YELLOW}Web UI is ON-DEMAND (saves memory — off by default):${NC}"
-echo -e "   • Start it when you want to upload/manage photos:"
-echo -e "       slideshow-web start     (prints the http://<ip>:${WEB_PORT} URL)"
-echo -e "   • Stop it when finished (frees RAM):"
-echo -e "       slideshow-web stop"
-echo -e "   • Show the URL anytime:   slideshow-web url"
+echo -e "  ${YELLOW}Web UI turns on automatically when you open it:${NC}"
+echo -e "   • It uses ~zero memory while idle. Opening the URL starts it;"
+echo -e "     it stops itself after 10 min of no use. No commands needed."
+echo -e "   • Get the URL anytime:   slideshow-web url"
+echo -e "   • (First page load after idle takes a few seconds to wake up.)"
 echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
 echo -e "   1. If Tailscale shows 'not-yet-authenticated':  sudo tailscale up"
 echo -e "   2. Reboot to start the slideshow display:       sudo reboot"
 echo -e "      (Until you upload photos, a TEST IMAGE is shown right away"
 echo -e "       so you can confirm the screen works — no waiting for midnight.)"
-echo -e "   3. Run 'slideshow-web start', open the URL on any Tailscale"
-echo -e "      device, upload photos, then 'slideshow-web stop'."
+echo -e "   3. On any Tailscale device just open  http://${TAILSCALE_IP}:${WEB_PORT}"
+echo -e "      — the server wakes up on its own. Upload photos, then walk away."
 echo ""
 echo -e "  ${YELLOW}How it works (DATE-DRIVEN):${NC}"
 echo -e "   • Name each photo by the date it should appear: YYYY-MM-DD"
@@ -837,7 +889,7 @@ echo -e "     for that date)."
 echo -e "   • The display re-checks every minute, so it changes right at"
 echo -e "     midnight on its own."
 echo ""
-echo -e "  ${YELLOW}Web UI features (run 'slideshow-web start' first):${NC}"
+echo -e "  ${YELLOW}Web UI features:${NC}"
 echo -e "   • Upload photos (named YYYY-MM-DD)"
 echo -e "   • Bulk delete: tick checkboxes (or Select All) -> Delete Selected"
 echo -e "   • Schedule / remove skip dates"
