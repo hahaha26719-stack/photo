@@ -96,7 +96,8 @@ info "Setting up Python virtual environment…"
 python3 -m venv --system-site-packages "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --quiet --upgrade pip
 # Flask + Werkzeug are pure-Python (no compiler needed). Pillow comes from apt.
-"$APP_DIR/venv/bin/pip" install --quiet flask werkzeug
+# werkzeug>=2.0 guarantees make_server(fd=) for systemd socket activation.
+"$APP_DIR/venv/bin/pip" install --quiet "flask>=2.0" "werkzeug>=2.0"
 
 # =============================================================================
 #  5. INITIAL STATE FILE
@@ -482,19 +483,22 @@ def delete_skip():
 def api_state():
     return jsonify(load_state())
 
-if __name__ == "__main__":
+def _serve():
     port = int(os.environ.get("PORT", 5000))
-    # If systemd socket-activated us, it passes the listening socket as fd 3.
-    # Serve on that inherited socket (via werkzeug) so the socket unit can
-    # start us on-demand. Otherwise fall back to binding the port ourselves.
-    if os.environ.get("LISTEN_FDS") and os.environ.get("LISTEN_PID") == str(os.getpid()):
+    socket_activated = (os.environ.get("LISTEN_FDS")
+                        and os.environ.get("LISTEN_PID") == str(os.getpid()))
+    if socket_activated:
+        # systemd passed the already-bound listening socket as fd 3.
+        # werkzeug's make_server accepts it directly via fd=.
         from werkzeug.serving import make_server
-        SD_LISTEN_FDS_START = 3   # systemd passes the socket as fd 3
-        srv = make_server("0.0.0.0", port, app, threaded=True, fd=SD_LISTEN_FDS_START)
+        srv = make_server("0.0.0.0", port, app, threaded=True, fd=3)
         srv.serve_forever()
     else:
-        # bind to all interfaces so Tailscale can reach it
-        app.run(host="0.0.0.0", port=port, debug=False)
+        # Run by hand / not socket-activated: bind the port ourselves.
+        app.run(host="0.0.0.0", port=port, threaded=True, debug=False)
+
+if __name__ == "__main__":
+    _serve()
 PYEOF
 
 chown "$DISPLAY_USER":"$DISPLAY_USER" "$APP_DIR/app.py"
@@ -589,11 +593,17 @@ PYGEN
 
 # Wait until the X server on :0 is actually accepting connections before we
 # try to draw. This avoids the "Can't open X display" feh error loop on boot.
-for _ in $(seq 1 30); do
-    if xset q >/dev/null 2>&1; then break; fi
-    echo "[display] waiting for X server on :0…"
+# We wait indefinitely (up to ~5 min of logging) rather than giving up and
+# spinning feh against a dead display.
+_waited=0
+until xset q >/dev/null 2>&1; do
+    if (( _waited % 10 == 0 )); then
+        echo "[display] waiting for X server on :0… (${_waited}s)"
+    fi
     sleep 2
+    _waited=$((_waited + 2))
 done
+echo "[display] X server is up after ${_waited}s."
 
 # Never blank / power-save the screen (prevents random "No signal" on HDMI).
 xset s off        2>/dev/null || true
